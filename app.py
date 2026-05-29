@@ -195,9 +195,6 @@ def registrar_entradas_y_gastos():
                 registrar_actividad_bitacora("Compras", "Registro de Entrada + Foto", detalles_auditoria)
                 st.success(f"✔️ Entrada registrada con éxito. Fotografía guardada.")
 
-# ==============================================================================
-# MODIFICACIÓN AVANZADA: REORGANIZACIÓN INTEGRAL DEL MÓDULO DE COCINA
-# ==============================================================================
 def registrar_salidas_cocina():
     st.header('📤 Operaciones de Cocina y Control de Consumos')
     if not os.path.exists(ARCHIVO_INVENTARIO):
@@ -208,10 +205,8 @@ def registrar_salidas_cocina():
         st.error("No hay inventario registrado en el sistema.")
         return
 
-    # Creamos sub-pestañas visuales de control profesional
     tab1, tab2 = st.tabs(["📋 Despacho Operativo Diario", "🗑️ Cierre de Turno (Mermas / Ajustes)"])
 
-    # PESTAÑA 1: DESPACHO TRADICIONAL
     with tab1:
         st.subheader("Salida Regular de Recursos")
         with st.form("form_salida_regular"):
@@ -226,17 +221,12 @@ def registrar_salidas_cocina():
                 else:
                     df_inventario.loc[df_inventario['Nombre'] == insumo_seleccionado, 'Cantidad_Disponible'] -= cantidad_solicitada
                     df_inventario.to_csv(ARCHIVO_INVENTARIO, index=False)
-                    
-                    # 🔍 BITÁCORA DE AUDITORÍA
                     registrar_actividad_bitacora("Cocina", "Salida Regular", f"Se consumieron {cantidad_solicitada} unidades de '{insumo_seleccionado}' para la operación de la jornada.")
                     st.success(f"✔️ Existencias actualizadas. Se retiraron {cantidad_solicitada} unidades.")
                     st.rerun()
 
-    # PESTAÑA 2: MERMAS, SOBRANTES Y FALTANTES (REGLA DE NEGOCIO SOLICITADA)
     with tab2:
         st.subheader("Conciliación de Alimentos al Fin del Turno")
-        st.caption("Utiliza esta sección para reportar desviaciones estocásticas entre las porciones estimadas y el consumo real.")
-        
         with st.form("form_ajustes_turno"):
             insumo_ajuste = st.selectbox('Insumo Afectado:', df_inventario['Nombre'].tolist())
             tipo_ajuste = st.radio("Tipo de Incidencia Encontrada:", ["Merma por Sobra (Comida cocinada que se desperdició)", "Faltante (Requirió elaboración de platillos adicionales de emergencia)"])
@@ -246,36 +236,71 @@ def registrar_salidas_cocina():
             
             if boton_ajuste:
                 stock_actual = df_inventario.loc[df_inventario['Nombre'] == insumo_ajuste, 'Cantidad_Disponible'].values[0]
-                
                 if tipo_ajuste.startswith("Merma por Sobra"):
-                    # La comida ya se había sacado del almacén, reportarla como merma no altera el stock actual del almacén (porque ya salió),
-                    # pero genera una estampa imborrable en la bitácora para el análisis del supervisor.
                     registrar_actividad_bitacora("Cocina", "Ajuste: Merma por Sobra", f"MERMA DETECTADA: Se desperdiciaron {cantidad_ajuste} unidades de '{insumo_ajuste}'. Motivo: {comentarios_ajuste}")
-                    st.warning(f"⚠️ Merma registrada en la bitácora de auditoría para análisis del Supervisor. El almacén central no sufre mermas directas.")
+                    st.warning(f"⚠️ Merma registrada en la bitácora de auditoría para análisis del Supervisor.")
                 else:
-                    # Es una producción extra de emergencia: SE DEBEN DESCONTAR los insumos adicionales del almacén.
                     if cantidad_ajuste > stock_actual:
-                        st.error(f"❌ Error: No puedes preparar alimento extra porque el almacén no tiene suficiente stock de '{insumo_ajuste}' (Disponible: {stock_actual}).")
+                        st.error(f"❌ Error: No puedes preparar alimento extra porque el almacén no tiene suficiente stock de '{insumo_ajuste}'.")
                     else:
                         df_inventario.loc[df_inventario['Nombre'] == insumo_ajuste, 'Cantidad_Disponible'] -= cantidad_ajuste
                         df_inventario.to_csv(ARCHIVO_INVENTARIO, index=False)
-                        registrar_actividad_bitacora("Cocina", "Ajuste: Elaboración Extra", f"PRODUCCIÓN ADICIONAL: Se extrajeron {cantidad_ajuste} unidades de '{insumo_ajuste}' debido a escasez de porciones. Motivo: {comentarios_ajuste}")
-                        st.success(f"🔥 Ajuste de emergencia completado. Se descontaron {cantidad_ajuste} unidades adicionales del almacén.")
+                        registrar_actividad_bitacora("Cocina", "Ajuste: Elaboración Extra", f"PRODUCCIÓN ADICIONAL: Se extrajeron {cantidad_ajuste} unidades de '{insumo_ajuste}'. Motivo: {comentarios_ajuste}")
+                        st.success(f"🔥 Ajuste de emergencia completado. Se descontaron {cantidad_ajuste} unidades.")
                         st.rerun()
 
+# ==============================================================================
+# MODIFICACIÓN INTEGRAL: DASHBOARD DE SUPERVISIÓN Y BUSINESS INTELLIGENCE
+# ==============================================================================
 def reportes_basicos():
-    st.header('📊 Reporte Analítico de la Simulación Macro')
+    st.header('📊 Panel de Inteligencia de Negocio y Supervisión')
+    st.caption("Análisis macro de control financiero, fluctuación de comensales e indicadores de desperdicio.")
+    
+    # Validamos que los archivos del simulador de 60 días existan en el sistema
     if not os.path.exists('consumo_diario.csv') or not os.path.exists('salidas.csv'):
-        st.warning("No hay datos históricos.")
+        st.warning("⚠️ No se detectan los archivos consolidados históricos del simulador macro (60 días) en el directorio.")
         return
+        
     df_consumo = pd.read_csv('consumo_diario.csv')
+    df_salidas = pd.read_csv('salidas.csv')
+    
+    # 📈 INDICADORES CLAVE DE RENDIMIENTO (KPIs)
     costo_total_historico = df_consumo['costo_total_dia'].sum()
     asistencia_media = df_consumo['asistencia_total'].mean()
-    col1, col2 = st.columns(2)
-    col1.metric(label="Inversión Total en Alimentos (Histórico)", value=f"${costo_total_historico:,.2f} MXN")
-    col2.metric(label="Promedio de Asistencia Diaria", value=f"{int(asistencia_media)} comensales")
-    st.subheader("📈 Fluctuación Estocástica de la Asistencia")
-    st.line_chart(df_consumo.set_index('fecha')['asistencia_total'])
+    
+    total_neto_kg = df_salidas['cantidad_neta_consumida_kg'].sum()
+    total_merma_kg = df_salidas['cantidad_merma_kg'].sum()
+    porcentaje_eficiencia_merma = (total_merma_kg / (total_neto_kg + total_merma_kg)) * 100
+    
+    # Renderizar tarjetas visuales de alto impacto (KPI Metrics)
+    col1, col2, col3 = st.columns(3)
+    col1.metric(label="Inversión Histórica en Alimentos", value=f"${costo_total_historico:,.2f} MXN")
+    col2.metric(label="Asistencia Promedio Diaria", value=f"{int(asistencia_media)} Comensales")
+    col3.metric(label="Tasa Global de Desperdicio (Merma)", value=f"{porcentaje_eficiencia_merma:.2f}%", delta=f"{'⚠️ Crítico' if porcentaje_eficiencia_merma > 10 else '✅ Óptimo'}")
+    
+    st.write("---")
+    
+    # 📊 GRÁFICO 1: TENDENCIA DE ASISTENCIA (LÍNEAS ESTOCÁSTICAS)
+    st.subheader("📈 Fluctuación Cronológica de la Demanda (Asistencia de Comensales)")
+    st.caption("Este gráfico visualiza la volatilidad estocástica del comedor, permitiendo identificar patrones de consumo y días de alta demanda.")
+    
+    # Preparamos los datos ordenados por fecha
+    df_linea = df_consumo[['fecha', 'asistencia_total']].copy()
+    df_linea = df_linea.set_index('fecha')
+    st.line_chart(df_linea, use_container_width=True)
+    
+    st.write("---")
+    
+    # 📊 GRÁFICO 2: AUDITORÍA DE MERMAS POR INGREDIENTE (BARRAS AGRUPADAS)
+    st.subheader("🗑️ Matriz Relacional: Alimento Neto Consumido vs Merma Generada")
+    st.caption("Permite evaluar de forma visual qué materias primas presentan mayor índice de desperdicio físico en la línea de servicio.")
+    
+    # Agrupamos las salidas por el nombre del ingrediente
+    df_barras = df_salidas.groupby('ingrediente')[['cantidad_neta_consumida_kg', 'cantidad_merma_kg']].sum()
+    
+    # Renombramos las columnas para que la leyenda de la gráfica luzca profesional
+    df_barras.columns = ['Consumo Neto Efectivo (Kg)', 'Merma Acumulada (Kg)']
+    st.bar_chart(df_barras, use_container_width=True)
 
 def control_asistencia_telegram():
     st.header('📱 Interfaz de Comunicación: Bot de Telegram')
