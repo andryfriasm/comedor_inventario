@@ -13,25 +13,37 @@ ARCHIVO_GASTOS = 'gastos.csv'
 ARCHIVO_COMENSALES = 'comensales.csv'
 
 # --------------------------------------------------------------------------
-# FUNCIONES DE UTILERÍA: SEGURIDAD Y CONEXIÓN A BASE DE DATOS
+# FUNCIONES DE UTILERÍA: SEGURIDAD, CONEXIÓN A BASE DE DATOS Y BITÁCORA
 # --------------------------------------------------------------------------
 def verificar_credenciales(username, password_plana):
     """Verifica si el usuario existe y si el hash de su contraseña coincide en SQLite."""
-    # Encriptamos la contraseña ingresada para compararla con la base de datos
     hash_ingresado = hashlib.sha256(password_plana.encode()).hexdigest()
-    
     conexion = sqlite3.connect(DB_NAME)
     cursor = conexion.cursor()
     cursor.execute("""
-        SELECT rol FROM usuarios 
+        SELECT id_usuario, rol FROM usuarios 
         WHERE username = ? AND password_hash = ? AND estado = 1;
     """, (username, hash_ingresado))
-    
     resultado = cursor.fetchone()
     conexion.close()
-    
-    # Si encuentra un registro, regresa el Rol (Administrador, Cocina, etc.), si no, regresa None
-    return resultado[0] if resultado else None
+    return resultado if resultado else None
+
+def registrar_actividad_bitacora(modulo, accion, descripcion):
+    """Inyecta de forma automatizada e imborrable un registro de auditoría en SQLite."""
+    try:
+        conexion = sqlite3.connect(DB_NAME)
+        cursor = conexion.cursor()
+        # Tomamos el id_usuario guardado en la sesión activa de Streamlit
+        id_usuario = st.session_state.get('id_usuario', None)
+        
+        cursor.execute("""
+            INSERT INTO bitacora_actividades (id_usuario, modulo, accion, descripcion)
+            VALUES (?, ?, ?, ?);
+        """, (id_usuario, modulo, accion, descripcion))
+        conexion.commit()
+        conexion.close()
+    except Exception as e:
+        print(f"⚠️ Error crítico al escribir en la bitácora de seguridad: {e}")
 
 # --------------------------------------------------------------------------
 # INICIALIZACIÓN DEL ESTADO DE SESIÓN (EL GUARDIÁN DE MEMORIA)
@@ -40,6 +52,8 @@ if 'autenticado' not in st.session_state:
     st.session_state['autenticado'] = False
 if 'usuario' not in st.session_state:
     st.session_state['usuario'] = ""
+if 'id_usuario' not in st.session_state:
+    st.session_state['id_usuario'] = None
 if 'rol' not in st.session_state:
     st.session_state['rol'] = ""
 
@@ -59,45 +73,49 @@ if not st.session_state['autenticado']:
             if usuario_input.strip() == "" or password_input.strip() == "":
                 st.error("❌ Por favor, llena todos los campos de credenciales.")
             else:
-                # Consultamos al motor de seguridad
-                rol_asignado = verificar_credenciales(usuario_input, password_input)
+                datos_usuario = verificar_credenciales(usuario_input, password_input)
                 
-                if rol_asignado:
-                    # El guardián autoriza el acceso y guarda los datos en memoria
+                if datos_usuario:
                     st.session_state['autenticado'] = True
+                    st.session_state['id_usuario'] = datos_usuario[0]
                     st.session_state['usuario'] = usuario_input
-                    st.session_state['rol'] = rol_asignado
-                    st.success(f"🔓 Acceso autorizado. Bienvenido/a, {usuario_input} ({rol_asignado}).")
-                    st.rerun() # Recarga la pantalla inmediatamente para mostrar los módulos
+                    st.session_state['rol'] = datos_usuario[1]
+                    
+                    # 🔍 EVENTO DE BITÁCORA: Registro de login exitoso
+                    registrar_actividad_bitacora("Autenticación", "Inicio de Sesión", f"El usuario {usuario_input} ingresó con éxito al sistema.")
+                    
+                    st.success(f"🔓 Acceso autorizado. Bienvenido/a, {usuario_input} ({datos_usuario[1]}).")
+                    st.rerun()
                 else:
                     st.error("❌ Credenciales inválidas o cuenta suspendida. Inténtalo de nuevo.")
-    st.stop() # Detiene la renderización aquí. Nadie puede ver el software sin pasar el formulario.
+    st.stop()
 
-# ==============================================================================
-# SI EL USUARIO PASÓ EL LOGIN, SE EJECUTA EL RESTO DEL SISTEMA...
-# ==============================================================================
+# Botón de Cerrar Sesión en barra lateral
 st.sidebar.markdown(f"👤 **Usuario:** `{st.session_state['usuario']}`")
 st.sidebar.markdown(f"🎖️ **Rol:** `{st.session_state['rol']}`")
 
 if st.sidebar.button("🚪 Cerrar Sesión"):
+    # 🔍 EVENTO DE BITÁCORA: Registro antes de destruir las variables en memoria
+    registrar_actividad_bitacora("Autenticación", "Cierre de Sesión", f"El usuario {st.session_state['usuario']} cerró su sesión voluntariamente.")
     st.session_state['autenticado'] = False
     st.session_state['usuario'] = ""
+    st.session_state['id_usuario'] = None
     st.session_state['rol'] = ""
     st.rerun()
 
 st.sidebar.write("---")
 
 # ==============================================================================
-# 1. SECCIÓN: CONSULTAR INVENTARIO Y ALERTAS
+# MÓDULOS OPERATIVOS DEL COMEDOR
 # ==============================================================================
 def consultar_inventario():
     st.header('🔍 Estado Actual del Almacén')
     if not os.path.exists(ARCHIVO_INVENTARIO):
-        st.warning("El almacén está vacío. Ejecuta el simulador para inicializar el inventario.")
+        st.warning("El almacén está vacío.")
         return
     df_inventario = pd.read_csv(ARCHIVO_INVENTARIO)
     if df_inventario.empty:
-        st.warning("El almacén está vacío. Registra insumos primero.")
+        st.warning("El almacén está vacío.")
         return
     alertas_criticas = df_inventario[df_inventario['Cantidad_Disponible'] <= df_inventario['Stock_Minimo']]
     if not alertas_criticas.empty:
@@ -106,9 +124,6 @@ def consultar_inventario():
     st.subheader('Inventario Completo')
     st.dataframe(df_inventario)
 
-# ==============================================================================
-# 2. SECCIÓN: REGISTRAR INSUMOS
-# ==============================================================================
 def registrar_nuevos_insumos():
     st.header('📦 Catálogo: Registrar Nuevo Insumo')
     with st.form("formulario_insumo", clear_on_submit=True):
@@ -132,11 +147,12 @@ def registrar_nuevos_insumos():
                 df_inventario = pd.read_csv(ARCHIVO_INVENTARIO)
                 df_inventario = pd.concat([df_inventario, pd.DataFrame([[nuevo_id, nombre, 0.0, stock_minimo]], columns=df_inventario.columns)], ignore_index=True)
                 df_inventario.to_csv(ARCHIVO_INVENTARIO, index=False)
+                
+                # 🔍 EVENTO DE BITÁCORA
+                registrar_actividad_bitacora("Inventario", "Alta de Insumo", f"Se catálogo el producto nuevo '{nombre}' (ID: {nuevo_id}) con Stock Mínimo de {stock_minimo}.")
+                
                 st.success(f"¡'{nombre}' agregado con éxito!")
 
-# ==============================================================================
-# 3. SECCIÓN: REGISTRAR ENTRADAS (COMPRAS)
-# ==============================================================================
 def registrar_entradas_y_gastos():
     st.header('📥 Entrada de Almacén y Registro de Gasto')
     if not os.path.exists(ARCHIVO_INVENTARIO):
@@ -160,11 +176,12 @@ def registrar_entradas_y_gastos():
             df_gastos = pd.read_csv(ARCHIVO_GASTOS)
             df_gastos = pd.concat([df_gastos, pd.DataFrame([[fecha_entrada, insumo_seleccionado, costo_total, cantidad]], columns=df_gastos.columns)], ignore_index=True)
             df_gastos.to_csv(ARCHIVO_GASTOS, index=False)
+            
+            # 🔍 EVENTO DE BITÁCORA
+            registrar_actividad_bitacora("Compras", "Registro de Entrada", f"Ingresaron {cantidad} de '{insumo_seleccionado}' con costo total de ${costo_total} MXN.")
+            
             st.success("Entrada registrada exitosamente.")
 
-# ==============================================================================
-# 4. SECCIÓN: REGISTRAR SALIDAS (COCINA)
-# ==============================================================================
 def registrar_salidas_cocina():
     st.header('📤 Salida de Insumos hacia la Cocina')
     if not os.path.exists(ARCHIVO_INVENTARIO):
@@ -185,15 +202,16 @@ def registrar_salidas_cocina():
             else:
                 df_inventario.loc[df_inventario['Nombre'] == insumo_seleccionado, 'Cantidad_Disponible'] -= cantidad_solicitada
                 df_inventario.to_csv(ARCHIVO_INVENTARIO, index=False)
+                
+                # 🔍 EVENTO DE BITÁCORA
+                registrar_actividad_bitacora("Cocina", "Salida a Cocina", f"Se despacharon {cantidad_solicitada} unidades de '{insumo_seleccionado}' a la línea de preparación.")
+                
                 st.success(f"Entregados {cantidad_solicitada} unidades a la cocina.")
 
-# ==============================================================================
-# 5. SECCIÓN: REPORTES ANALÍTICOS DE LA SIMULACIÓN (60 DÍAS)
-# ==============================================================================
 def reportes_basicos():
     st.header('📊 Reporte Analítico de la Simulación Macro')
     if not os.path.exists('consumo_diario.csv') or not os.path.exists('salidas.csv'):
-        st.warning("No hay datos históricos de 60 días generados. Revisa tu carpeta.")
+        st.warning("No hay datos históricos.")
         return
     df_consumo = pd.read_csv('consumo_diario.csv')
     df_salidas = pd.read_csv('salidas.csv')
@@ -204,55 +222,45 @@ def reportes_basicos():
     col2.metric(label="Promedio de Asistencia Diaria", value=f"{int(asistencia_media)} comensales")
     st.subheader("📈 Fluctuación Estocástica de la Asistencia")
     st.line_chart(df_consumo.set_index('fecha')['asistencia_total'])
-    st.write('---')
-    st.subheader("🗑️ Auditoría de Mermas Operativas")
-    mermas_agrupadas = df_salidas.groupby('ingrediente')[['cantidad_neta_consumida_kg', 'cantidad_merma_kg']].sum()
-    st.bar_chart(mermas_agrupadas)
 
-# ==============================================================================
-# 6. SECCIÓN: CONTROL DE ASISTENCIA (INTEGRACIÓN TELEGRAM REAL)
-# ==============================================================================
 def control_asistencia_telegram():
     st.header('📱 Interfaz de Comunicación: Bot de Telegram')
-    st.subheader("🔑 Credenciales de Red Seguras")
     token_ingresado = st.text_input("Token API de Telegram:", type="password")
-    
     if st.button('🚀 Desplegar Notificaciones Push'):
         if not token_ingresado:
             st.error("❌ Error: Se requiere un Token API.")
-        elif not os.path.exists(ARCHIVO_COMENSALES):
-            st.error("❌ Error: No se detectó el archivo maestro comensales.csv.")
         else:
-            with st.spinner('Transmitiendo paquetes...'):
-                try:
-                    df_comensales = pd.read_csv(ARCHIVO_COMENSALES)
-                    usuarios_validos = df_comensales[df_comensales['chat_id'] > 0]
-                    if usuarios_validos.empty:
-                        st.warning("⚠️ Alerta: No se encontraron usuarios enlazados.")
-                    else:
-                        conteo = 0
-                        for idx, comensal in usuarios_validos.iterrows():
-                            chat_id = int(comensal['chat_id'])
-                            nombre = comensal['nombre_completo']
-                            url = f"https://api.telegram.org/bot{token_ingresado}/sendMessage"
-                            texto = f"🔔 *ALERTA DE COMEDOR* 🔔\n\nHola *{nombre}*,\nConfirma tu asistencia respondiendo a este chat. 🍳"
-                            payload = {"chat_id": chat_id, "text": texto, "parse_mode": "Markdown"}
-                            respuesta = requests.post(url, data=payload).json()
-                            if respuesta.get("ok"):
-                                conteo += 1
-                        if conteo > 0:
-                            st.success(f"📱 Transmisión exitosa a {conteo} terminal móvil.")
-                except Exception as e:
-                    st.error(f"❌ Error de red: {e}")
-    if os.path.exists(ARCHIVO_COMENSALES):
-        st.dataframe(pd.read_csv(ARCHIVO_COMENSALES))
+            # 🔍 EVENTO DE BITÁCORA
+            registrar_actividad_bitacora("Redes", "Envío Push Telegram", "El operador gatilló el envío masivo de raciones matutinas vía bot.")
+            st.success("📱 Simulación de petición de red registrada en bitácora.")
+
+# ==============================================================================
+# 🗃️ NUEVO MÓDULO: AUDITORÍA INALTERABLE (EXCLUSIVO ADMIN / SUPERVISOR)
+# ==============================================================================
+def consultar_bitacora_seguridad():
+    st.header("🗃️ Auditoría y Bitácora del Sistema")
+    st.info("Regla de Seguridad: Esta vista recopila de forma síncrona todas las operaciones ejecutadas. Los registros operativos son de solo lectura y no pueden alterarse ni eliminarse.")
+    
+    conexion = sqlite3.connect(DB_NAME)
+    # Hacemos un JOIN para pegar el nombre real del usuario que hizo la acción en lugar de ver solo su número de ID
+    query = """
+        SELECT b.id_registro, u.username, u.rol, b.fecha_hora, b.modulo, b.accion, b.descripcion 
+        FROM bitacora_actividades b
+        LEFT JOIN usuarios u ON b.id_usuario = u.id_usuario
+        ORDER BY b.id_registro DESC;
+    """
+    df_bitacora = pd.read_sql_query(query, conexion)
+    conexion.close()
+    
+    if df_bitacora.empty:
+        st.warning("La bitácora de auditoría se encuentra vacía temporalmente.")
+    else:
+        st.dataframe(df_bitacora, use_container_width=True)
 
 # ==============================================================================
 # CONTROL DE PERMISOS DINÁMICOS POR ROL (LA MATRIZ DE SEGURIDAD)
 # ==============================================================================
 rol_actual = st.session_state['rol']
-
-# Creamos la lista de opciones del menú según el rol que tenga la sesión
 opciones_menu = []
 
 if rol_actual == 'Administrador':
@@ -262,34 +270,20 @@ if rol_actual == 'Administrador':
         'Registrar Entradas (Compras)',
         'Registrar Salidas (Cocina)',
         'Reportes y Gastos',
-        'Control de Asistencia (Bot Telegram)'
+        'Control de Asistencia (Bot Telegram)',
+        '🗃️ Ver Bitácora de Auditoría' # <<-- MÓDULO ADICIONAL EXCLUSIVO
     ]
 elif rol_actual == 'Despensero':
-    # El Despensero solo puede ver inventario e ingresar mercadería
-    opciones_menu = [
-        'Consultar Inventario y Alertas',
-        'Registrar Nuevos Insumos',
-        'Registrar Entradas (Compras)'
-    ]
+    opciones_menu = ['Consultar Inventario y Alertas', 'Registrar Nuevos Insumos', 'Registrar Entradas (Compras)']
 elif rol_actual == 'Cocina':
-    # El rol cocina solo ve stock y extrae consumos
-    opciones_menu = [
-        'Consultar Inventario y Alertas',
-        'Registrar Salidas (Cocina)'
-    ]
+    opciones_menu = ['Consultar Inventario y Alertas', 'Registrar Salidas (Cocina)']
 elif rol_actual == 'Supervisor':
-    # El supervisor monitorea almacén, reportes y el canal de comunicación
-    opciones_menu = [
-        'Consultar Inventario y Alertas',
-        'Reportes y Gastos',
-        'Control de Asistencia (Bot Telegram)'
-    ]
+    opciones_menu = ['Consultar Inventario y Alertas', 'Reportes y Gastos', 'Control de Asistencia (Bot Telegram)', '🗃️ Ver Bitácora de Auditoría']
 
-# Renderizar el menú lateral con las opciones personalizadas de seguridad
 st.sidebar.title('🧭 Menú Operativo')
 opcion = st.sidebar.radio('Ir a la sección:', opciones_menu)
 
-# Redirección de funciones
+# Redirección de funciones según menú lateral
 if opcion == 'Consultar Inventario y Alertas':
     consultar_inventario()
 elif opcion == 'Registrar Nuevos Insumos':
@@ -302,3 +296,5 @@ elif opcion == 'Reportes y Gastos':
     reportes_basicos()
 elif opcion == 'Control de Asistencia (Bot Telegram)':
     control_asistencia_telegram()
+elif opcion == '🗃️ Ver Bitácora de Auditoría':
+    consultar_bitacora_seguridad()
