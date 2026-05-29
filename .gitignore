@@ -1,3 +1,5 @@
 __pycache__/
 .streamlit/
 *.csv
+# Base de datos relacional local
+comedor.db
