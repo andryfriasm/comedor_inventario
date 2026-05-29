@@ -46,9 +46,17 @@ for i in range(1, POBLACION_TOTAL + 1):
     nom = f"{random.choice(nombres)} {random.choice(apellidos)} {random.choice(apellidos)}"
     edad = int(random.triangular(18, 45, 25)) 
     imc = round(random.uniform(24.5, 29.5), 2)
-    comensales_list.append([i, nom, edad, imc])
 
-df_comensales = pd.DataFrame(comensales_list, columns=['id_comensal', 'nombre_completo', 'edad', 'imc'])
+    # Si es el primer comensal, le asignamos tu ID real de Telegram automáticamente
+    if i == 1:
+        id_telegram = 1676784828  # <<-- AQUÍ COLOCA TU NÚMERO DE TELEGRAM (Ej: 987654321)
+    else:
+        id_telegram = 0
+
+    comensales_list.append([i, nom, edad, imc, id_telegram])
+
+# Agregamos 'chat_id' formalmente a las columnas asignadas por Python
+df_comensales = pd.DataFrame(comensales_list, columns=['id_comensal', 'nombre_completo', 'edad', 'imc', 'chat_id'])
 df_comensales.to_csv('comensales.csv', index=False)
 
 # C. Crear menus.csv (Configuración de los 10 menús rotativos por tiempo)
