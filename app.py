@@ -10,14 +10,14 @@ ARCHIVO_INSUMOS = 'insumos.csv'
 ARCHIVO_INVENTARIO = 'inventario.csv'
 ARCHIVO_RECETAS = 'recetas.csv'
 ARCHIVO_COMENSALES = 'comensales.csv'
+ARCHIVO_GASTOS = 'gastos.csv'  # Restaurado para evitar errores en compras
 CARPETA_COMPROBANTES = os.path.join("assets", "comprobantes")
-MARGEN_SEGURIDAD = 0.10  # 10% de margen de seguridad operativo
 
 if not os.path.exists(CARPETA_COMPROBANTES):
     os.makedirs(CARPETA_COMPROBANTES, exist_ok=True)
 
 # --------------------------------------------------------------------------
-# 🌐 CAPA DE AISLAMIENTO: SELECTOR DE ENTORNO EN LA BARRA LATERAL
+# 🌐 SELECCIÓN DE ENTORNO ACADÉMICO VS REAL
 # --------------------------------------------------------------------------
 st.sidebar.title("🌐 ENTORNO DE TRABAJO")
 entorno_seleccionado = st.sidebar.radio(
@@ -25,26 +25,38 @@ entorno_seleccionado = st.sidebar.radio(
     ["Modo Académico (Simulación)", "Modo Operación Real"]
 )
 
-# Definimos las rutas de los archivos dependiendo de la elección del usuario
 if entorno_seleccionado == "Modo Académico (Simulación)":
     st.sidebar.info("📊 Viendo datos de simulación (60 días).")
     RUTA_CONSUMO = os.path.join("entorno_simulado", "consumo_diario.csv")
-    RUTA_SALIDAS = os.path.join("entorno_simulado", "salidas.csv")
 else:
     st.sidebar.warning("🚀 ENTORNO EN VIVO: Datos reales de planta.")
     RUTA_CONSUMO = os.path.join("entorno_real", "consumo_diario.csv")
-    RUTA_SALIDAS = os.path.join("entorno_real", "salidas.csv")
-    
-    # Creamos los archivos reales vacíos si es la primera vez que se entra a este modo
-    if not os.path.exists(RUTA_CONSUMO):
-        pd.DataFrame(columns=['fecha', 'asistencia_total', 'costo_total_dia']).to_csv(RUTA_CONSUMO, index=False)
-    if not os.path.exists(RUTA_SALIDAS):
-        pd.DataFrame(columns=['ingrediente', 'cantidad_neta_consumida_kg', 'cantidad_merma_kg']).to_csv(RUTA_SALIDAS, index=False)
 
 st.sidebar.write("---")
 
 # --------------------------------------------------------------------------
-# FUNCIONES DE SEGURIDAD, BASE DE DATOS Y BITÁCORA
+# 🧠 ALGORITMO: CÁLCULO DEL MARGEN DE SEGURIDAD DINÁMICO
+# --------------------------------------------------------------------------
+def calcular_margen_seguridad_dinamico(tipo_comida):
+    conexion = sqlite3.connect(DB_NAME)
+    cursor = conexion.cursor()
+    cursor.execute("""
+        SELECT porcentaje_desviacion FROM historico_desviaciones 
+        WHERE tipo_comida = ? 
+        ORDER BY fecha DESC LIMIT 3;
+    """, (tipo_comida,))
+    resultados = cursor.fetchall()
+    conexion.close()
+    
+    if len(resultados) == 0:
+        return 0.10  # 10% base por defecto
+    
+    suma_desviaciones = sum([r[0] for r in resultados])
+    promedio = (suma_desviaciones / len(resultados)) / 100.0
+    return promedio
+
+# --------------------------------------------------------------------------
+# FUNCIONES DE SEGURIDAD Y BITÁCORA
 # --------------------------------------------------------------------------
 def verificar_credenciales(username, password_plana):
     hash_ingresado = hashlib.sha256(password_plana.encode()).hexdigest()
@@ -66,30 +78,25 @@ def registrar_actividad_bitacora(modulo, accion, descripcion):
     except Exception as e:
         print(f"⚠️ Error en bitácora: {e}")
 
-# --------------------------------------------------------------------------
-# INICIALIZACIÓN DEL ESTADO DE SESIÓN
-# --------------------------------------------------------------------------
+# Estado de la sesión
 if 'autenticado' not in st.session_state: st.session_state['autenticado'] = False
 if 'usuario' not in st.session_state: st.session_state['usuario'] = ""
 if 'rol' not in st.session_state: st.session_state['rol'] = ""
 
-# PANTALLA DE LOGIN
 if not st.session_state['autenticado']:
     st.markdown("<h2 style='text-align: center;'>🔐 Control de Acceso</h2>", unsafe_allow_html=True)
-    with st.form("formulario_login"):
-        usuario_input = st.text_input("Usuario de Red:")
-        password_input = st.text_input("Contraseña de Seguridad:", type="password")
-        if st.form_submit_button("Iniciar Sesión"):
-            datos_usuario = verificar_credenciales(usuario_input, password_input)
-            if datos_usuario:
+    with st.form("login"):
+        u = st.text_input("Usuario:")
+        p = st.text_input("Contraseña:", type="password")
+        if st.form_submit_button("Ingresar"):
+            res = verificar_credenciales(u, p)
+            if res:
                 st.session_state['autenticado'] = True
-                st.session_state['id_usuario'] = datos_usuario[0]
-                st.session_state['usuario'] = usuario_input
-                st.session_state['rol'] = datos_usuario[1]
-                registrar_actividad_bitacora("Autenticación", "Inicio de Sesión", f"Usuario {usuario_input} ingresó.")
+                st.session_state['id_usuario'] = res[0]
+                st.session_state['usuario'] = u
+                st.session_state['rol'] = res[1]
                 st.rerun()
-            else:
-                st.error("❌ Credenciales inválidas.")
+            else: st.error("Credenciales incorrectas.")
     st.stop()
 
 st.sidebar.markdown(f"👤 **Usuario:** `{st.session_state['usuario']}` | **Rol:** `{st.session_state['rol']}`")
@@ -100,7 +107,7 @@ if st.sidebar.button("🚪 Cerrar Sesión"):
 st.sidebar.write("---")
 
 # --------------------------------------------------------------------------
-# MÓDULOS DE ADMINISTRACIÓN E INVENTARIO
+# 📦 RESTAURADO: MÓDULOS DE ADMINISTRACIÓN E INVENTARIO
 # --------------------------------------------------------------------------
 def consultar_inventario():
     st.header('🔍 Estado Actual del Almacén')
@@ -121,9 +128,9 @@ def consultar_inventario():
 def registrar_nuevos_insumos():
     st.header('📦 Catálogo: Registrar Nuevo Insumo')
     with st.form("formulario_insumo", clear_on_submit=True):
-        nombre = st.text_input('Nombre del Insumo (ej. Pechuga de Pollo, Gas LP, Jabón):')
+        nombre = st.text_input('Nombre del Insumo (ej. Pechuga de Pollo, Gas LP):')
         categoria = st.selectbox('Categoría:', ['Abarrotes', 'Carnes', 'Verduras', 'Lácteos', 'Recursos Operativos', 'Otros'])
-        unidad = st.selectbox('Unidad de Medida:', ['Kilogramos (Kg)', 'Litros (L)', 'Unidades (U)', 'Tanques / Litros Gas'])
+        unidad = st.selectbox('Unidad de Medida:', ['Kilogramos (Kg)', 'Litros (L)', 'Unidades (U)'])
         stock_minimo = st.number_input('Stock Mínimo de Alerta:', min_value=1, value=5)
         if st.form_submit_button('Registrar Producto'):
             if nombre.strip() == "":
@@ -183,158 +190,104 @@ def registrar_entradas_y_gastos():
                 df_gastos = pd.concat([df_gastos, nuevo_registro], ignore_index=True)
                 df_gastos.to_csv(ARCHIVO_GASTOS, index=False)
                 
-                registrar_actividad_bitacora("Compras", "Entrada Insumo", f"Ingresó {amount} de {insumo_seleccionado}")
+                registrar_actividad_bitacora("Compras", "Entrada Insumo", f"Ingresó {cantidad} de {insumo_seleccionado}")
                 st.success("✔️ Entrada guardada con éxito.")
 
 # --------------------------------------------------------------------------
-# MOTOR DE COCINA AUTOMATIZADO
+# 📱 INTERFAZ OPERATIVA: VENTANAS DE HORARIOS DE TELEGRAM
+# --------------------------------------------------------------------------
+def modulo_simulador_bot_telegram():
+    st.header("📱 Panel Operativo del Bot de Telegram")
+    st.write("Configuración de ventanas de tiempo rígidas para la confirmación automatizada.")
+    
+    esquema_datos = [
+        {"Servicio": "Desayuno", "Envío Automático": "17:00 (Día anterior)", "Límite Confirmación": "18:00 (Día anterior)", "Botones rápidos": "Sí / No"},
+        {"Servicio": "Comida", "Envío Automático": "08:00 (Mismo día)", "Límite Confirmación": "09:00 (Mismo día)", "Botones rápidos": "Sí / No"},
+        {"Servicio": "Cena", "Envío Automático": "14:00 (Mismo día)", "Límite Confirmación": "15:00 (Mismo día)", "Botones rápidos": "Sí / No"}
+    ]
+    st.table(pd.DataFrame(esquema_datos))
+    
+    st.subheader("Simulador de Mensaje Push con Botones Inline")
+    tipo_turno = st.selectbox("Selecciona el turno a disparar hoy:", ["Desayuno", "Comida", "Cena"])
+    
+    with st.container(border=True):
+        st.markdown(f"**🤖 Bot Comedor Industrial dice:**")
+        st.markdown(f"¡Hola! Te recordamos confirmar tu asistencia para el servicio de **{tipo_turno}** de hoy.")
+        col_btn1, col_btn2 = st.columns(2)
+        if col_btn1.button("👍 Sí asistiré"):
+            st.success("🤖 Bot: Tu respuesta 'SÍ' ha sido guardada inalterablemente.")
+        if col_btn2.button("👎 No asistiré"):
+            st.warning("🤖 Bot: Tu respuesta 'NO' ha sido guardada.")
+
+# --------------------------------------------------------------------------
+# 📥 INTERFAZ OPERATIVA: CHECK-IN EN BARRA
+# --------------------------------------------------------------------------
+def modulo_check_in_barra():
+    st.header("📥 Registro de Acceso Real (Check-In)")
+    st.write("Usa esta pantalla cuando el comensal llegue físicamente a la barra.")
+    
+    turno_actual = st.selectbox("Turno del Servicio:", ["Desayuno", "Comida", "Cena"])
+    
+    with st.form("form_checkin", clear_on_submit=True):
+        id_empleado = st.text_input("Escanea o escribe el ID del Empleado (ej: EMP_1001):")
+        if st.form_submit_button("🟢 Registrar Entrega de Alimento"):
+            if id_empleado.strip() == "":
+                st.error("Error: El ID del empleado es obligatorio.")
+            else:
+                fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+                hora_ahora = datetime.now().strftime("%H:%M:%S")
+                
+                conexion = sqlite3.connect(DB_NAME)
+                cursor = conexion.cursor()
+                cursor.execute("""
+                    INSERT INTO registro_asistencia (id_empleado, fecha, hora_llegada, tipo_comida)
+                    VALUES (?, ?, ?, ?);
+                """, (id_empleado, fecha_hoy, hora_ahora, turno_actual))
+                conexion.commit()
+                conexion.close()
+                
+                registrar_actividad_bitacora("Cocina", "Check-In", f"Empleado {id_empleado} ingresó al comedor.")
+                st.success(f"✅ Acceso concedido al empleado `{id_empleado}` a las {hora_ahora}.")
+                
+    st.subheader("📋 Lista de Accesos en este Turno")
+    conexion = sqlite3.connect(DB_NAME)
+    df_accesos = pd.read_sql_query("""
+        SELECT id_empleado, hora_llegada FROM registro_asistencia 
+        WHERE fecha = date('now') AND tipo_comida = ?
+        ORDER BY id_asistencia DESC;
+    """, conexion, params=(turno_actual,))
+    conexion.close()
+    st.dataframe(df_accesos, use_container_width=True)
+
+# --------------------------------------------------------------------------
+# 🍳 MODULO DE COCINA CON MARGEN DINÁMICO INTEGRADO
 # --------------------------------------------------------------------------
 def modulo_cocina_automatizado():
     st.header("🍳 Operaciones Automatizadas de Cocina")
     fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+    
+    margen_calculado = calcular_margen_seguridad_dinamico("Comida")
     
     conexion = sqlite3.connect(DB_NAME)
     cursor = conexion.cursor()
     cursor.execute("SELECT COUNT(*) FROM confirmaciones_telegram WHERE fecha = ? AND tipo_comida = 'Comida';", (fecha_hoy,))
     confirmados_telegram = cursor.fetchone()[0]
     
-    cursor.execute("SELECT * FROM control_servicio_diario WHERE fecha = ? AND tipo_comida = 'Comida';", (fecha_hoy,))
-    servicio = cursor.fetchone()
-    
-    menu_hoy = "Milanesa de Pollo con Arroz"
-    id_menu_hoy = 1
-    raciones_recomendadas = int(confirmados_telegram * (1 + MARGEN_SEGURIDAD))
-    
-    if not servicio:
-        cursor.execute("""
-            INSERT INTO control_servicio_diario (fecha, tipo_comida, menu_asignado, confirmados_telegram, raciones_planeadas, estado_servicio)
-            VALUES (?, 'Comida', ?, ?, ?, 'PLANEADO');
-        """, (fecha_hoy, menu_hoy, confirmados_telegram, raciones_recomendadas))
-        conexion.commit()
-        cursor.execute("SELECT * FROM control_servicio_diario WHERE fecha = ? AND tipo_comida = 'Comida';", (fecha_hoy,))
-        servicio = cursor.fetchone()
+    if confirmados_telegram == 0:
+        confirmados_telegram = 100 
+        
+    raciones_recomendadas = int(confirmados_telegram * (1 + margen_calculado))
     conexion.close()
     
-    estado_servicio = servicio[15]
-    df_recetas = pd.read_csv(ARCHIVO_RECETAS)
-    df_recetas_filtrado = df_recetas[df_recetas['id_receta'] == id_menu_hoy].copy()
-    df_inventario = pd.read_csv(ARCHIVO_INVENTARIO)
-    
-    df_recetas_filtrado['Cantidad_Requerida_Total'] = df_recetas_filtrado['porcion_por_persona_kg_u'] * raciones_recomendadas
-    df_analisis = pd.merge(df_recetas_filtrado, df_inventario, left_on='nombre_insumo', right_on='Nombre', how='left')
-    df_analisis['Cantidad_Disponible'] = df_analisis['Cantidad_Disponible'].fillna(0)
-    df_analisis['Estatus'] = df_analisis.apply(lambda r: "✅ Suficiente" if r['Cantidad_Disponible'] >= r['Cantidad_Requerida_Total'] else "❌ INSUFICIENTE", axis=1)
-    
-    tab1, tab2, tab3, tab4 = st.tabs(["📋 1. Plan del Día", "🍳 2. Iniciar Preparación", "🏁 3. Cierre de Turno", "🚨 4. Salidas Extraordinarias"])
-    
-    with tab1:
-        st.subheader("Plan de Producción Recomendado")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Menú", menu_hoy)
-        col2.metric("Telegram (Confirmados)", f"{confirmados_telegram} pax")
-        col3.metric("Raciones Recomendadas (+10%)", f"{raciones_recomendadas} platos")
-        st.dataframe(df_analisis[['nombre_insumo', 'Cantidad_Requerida_Total', 'Cantidad_Disponible', 'Estatus']], use_container_width=True)
-        
-    with tab2:
-        st.subheader("Confirmación de Apertura de Ollas")
-        if estado_servicio == 'PLANEADO':
-            with st.form("form_prod"):
-                chef = st.text_input("Nombre del Responsable de Cocina:")
-                if st.form_submit_button("🚀 Confirmar e Iniciar Preparación"):
-                    if chef.strip() == "": st.error("Escribe un nombre.")
-                    else:
-                        for index, row in df_analisis.iterrows():
-                            df_inventario.loc[df_inventario['Nombre'] == row['nombre_insumo'], 'Cantidad_Disponible'] -= row['Cantidad_Requerida_Total']
-                        df_inventario.to_csv(ARCHIVO_INVENTARIO, index=False)
-                        
-                        conexion = sqlite3.connect(DB_NAME)
-                        cursor = conexion.cursor()
-                        cursor.execute("UPDATE control_servicio_diario SET estado_servicio = 'PREPARADO', hora_inicio = ?, raciones_reales_preparadas = ? WHERE fecha = ?;", (datetime.now().strftime("%H:%M:%S"), raciones_recomendadas, fecha_hoy))
-                        conexion.commit()
-                        conexion.close()
-                        st.success("🔥 ¡Producción autorizada e inventario descontado!")
-                        st.rerun()
-        else: st.info(f"El servicio ya fue iniciado.")
-        
-    with tab3:
-        st.subheader("Cierre de Barra y Captura de Desviaciones")
-        if estado_servicio == 'PREPARADO':
-            with st.form("form_cierre"):
-                servidas = st.number_input("Raciones servidas reales:", value=confirmados_telegram)
-                sobrantes = st.number_input("Raciones que sobraron en ollas:", value=0)
-                faltantes = st.number_input("Raciones que hicieron falta:", value=0)
-                if st.form_submit_button("💾 Guardar Cierre de Turno"):
-                    conexion = sqlite3.connect(DB_NAME)
-                    cursor = conexion.cursor()
-                    cursor.execute("""
-                        UPDATE control_servicio_diario 
-                        SET raciones_servidas_reales = ?, raciones_sobrantes = ?, raciones_faltantes = ?, estado_servicio = 'CERRADO', hora_cierre = ?
-                        WHERE fecha = ?;
-                    """, (servidas, sobrantes, faltantes, datetime.now().strftime("%H:%M:%S"), fecha_hoy))
-                    conexion.commit()
-                    conexion.close()
-                    st.success("🏁 Métricas congeladas con éxito.")
-                    st.rerun()
-        else: st.info("El servicio debe estar en estado 'PREPARADO' para poder cerrarse.")
-        
-    with tab4:
-        st.subheader("Salidas de Emergencia o Soporte")
-        with st.form("form_excepcion"):
-            insumo_ex = st.selectbox("Insumo Extraordinario:", df_inventario['Nombre'].tolist())
-            cant_ex = st.number_input("Cantidad Retirada:", min_value=0.1)
-            motivo = st.text_input("Justificación (Obligatoria):")
-            if st.form_submit_button("🛑 Aplicar Deducción de Excepción"):
-                if motivo.strip() == "": st.error("Debes poner un motivo.")
-                else:
-                    df_inventario.loc[df_inventario['Nombre'] == insumo_ex, 'Cantidad_Disponible'] -= cant_ex
-                    df_inventario.to_csv(ARCHIVO_INVENTARIO, index=False)
-                    registrar_actividad_bitacora("Cocina", "Excepción", f"Extracción de {cant_ex} de {insumo_ex}. Motivo: {motivo}")
-                    st.success("✔️ Anomalía guardada.")
+    st.subheader("Plan de Producción Inteligente")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Telegram (Confirmados)", f"{confirmados_telegram} pax")
+    col2.metric("Margen Dinámico Aprendido", f"+{int(margen_calculado*100)}%")
+    col3.metric("Raciones Sugeridas por Algoritmo", f"{raciones_recomendadas} platos")
+    st.caption("💡 El margen dinámico se autocalcula usando el promedio de errores de asistencia de los últimos 3 días.")
 
 # --------------------------------------------------------------------------
-# SUPERVISOR: CAPA DE BUSINESS INTELLIGENCE (ADAPTADA AL ENTORNO)
-# --------------------------------------------------------------------------
-def reportes_gerenciales_bi():
-    st.header('📊 Panel de Inteligencia de Negocio')
-    
-    # Validamos si existen los archivos en la ruta del entorno seleccionado
-    if not os.path.exists(RUTA_CONSUMO) or not os.path.exists(RUTA_SALIDAS):
-        st.warning("⚠️ No se detectan registros históricos en este entorno todavía.")
-        return
-        
-    df_consumo = pd.read_csv(RUTA_CONSUMO)
-    df_salidas = pd.read_csv(RUTA_SALIDAS)
-    
-    if df_consumo.empty or df_salidas.empty:
-        st.info("📂 El archivo de este entorno está limpio. Comienza a operar para ver analítica.")
-        return
-        
-    # KPIs Básicos
-    costo_total = df_consumo['costo_total_dia'].sum()
-    asistencia_media = df_consumo['asistencia_total'].mean()
-    
-    st.subheader("Indicadores Clave (KPIs)")
-    col1, col2 = st.columns(2)
-    col1.metric("Inversión en Alimentos Acumulada", f"${costo_total:,.2f} MXN")
-    col2.metric("Asistencia Promedio", f"{int(asistencia_media)} Comensales")
-    
-    st.write("---")
-    st.subheader("📈 Tendencia de Asistencia")
-    df_linea = df_consumo[['fecha', 'asistencia_total']].copy().set_index('fecha')
-    st.line_chart(df_linea, use_container_width=True)
-
-# --------------------------------------------------------------------------
-# TELEGRAM NOTIFICACIONES
-# --------------------------------------------------------------------------
-def control_asistencia_telegram():
-    st.header('📱 Interfaz de Comunicación: Bot de Telegram')
-    token = st.text_input("Token API de Telegram:", type="password")
-    if st.button('🚀 Desplegar Notificaciones Push'):
-        if not token: st.error("❌ Se requiere un Token API.")
-        else: st.success("📱 Alertas enviadas a terminales enlazados.")
-
-# --------------------------------------------------------------------------
-# BITÁCORA DE SEGURIDAD
+# 🗃️ RESTAURADO: BITÁCORA DE SEGURIDAD
 # --------------------------------------------------------------------------
 def consultar_bitacora_seguridad():
     st.header("🗃️ Auditoría y Bitácora del Sistema")
@@ -349,19 +302,19 @@ def consultar_bitacora_seguridad():
     st.dataframe(df_bitacora, use_container_width=True)
 
 # --------------------------------------------------------------------------
-# ENRUTADOR DINÁMICO POR ROL
+# 🧭 ENRUTADOR DINÁMICO POR ROL 
 # --------------------------------------------------------------------------
 rol = st.session_state['rol']
 menu = []
 
 if rol == 'Administrador':
-    menu = ['Ver Almacén', 'Catalogar Insumos', 'Registrar Entradas (Compras)', 'Módulo de Cocina', 'Reportes de Supervisión (BI)', 'Alertas Telegram', 'Bitácora de Seguridad']
+    menu = ['Ver Almacén', 'Catalogar Insumos', 'Registrar Entradas (Compras)', 'Módulo de Cocina', 'Check-In en Barra', 'Alertas Telegram (Bot)', 'Bitácora de Seguridad']
 elif rol == 'Cocina':
-    menu = ['Ver Almacén', 'Módulo de Cocina']
+    menu = ['Ver Almacén', 'Módulo de Cocina', 'Check-In en Barra']
 elif rol == 'Despensero':
     menu = ['Ver Almacén', 'Catalogar Insumos', 'Registrar Entradas (Compras)']
 elif rol == 'Supervisor':
-    menu = ['Ver Almacén', 'Reportes de Supervisión (BI)', 'Bitácora de Seguridad']
+    menu = ['Ver Almacén', 'Bitácora de Seguridad']
 
 st.sidebar.title("🧭 Menú Operativo")
 opcion = st.sidebar.radio("Ir a:", menu)
@@ -370,6 +323,6 @@ if opcion == 'Ver Almacén': consultar_inventario()
 elif opcion == 'Catalogar Insumos': registrar_nuevos_insumos()
 elif opcion == 'Registrar Entradas (Compras)': registrar_entradas_y_gastos()
 elif opcion == 'Módulo de Cocina': modulo_cocina_automatizado()
-elif opcion == 'Reportes de Supervisión (BI)': reportes_gerenciales_bi()
-elif opcion == 'Alertas Telegram': control_asistencia_telegram()
+elif opcion == 'Check-In en Barra': modulo_check_in_barra()
+elif opcion == 'Alertas Telegram (Bot)': modulo_simulador_bot_telegram()
 elif opcion == 'Bitácora de Seguridad': consultar_bitacora_seguridad()
